@@ -56,7 +56,7 @@ public class LazyConfig {
     protected int threads = 50;
     protected int retry = 3;
     protected int maxReceiveSize=Config.MAX_RECEIVE_SIZE;
-    protected int maxRetry=Config.MAX_RETRY;
+//    protected int maxRetry=Config.MAX_RETRY;
 
     public LazyConfig(String confFileName) throws Exception {
         String jsonStr = FileUtils.readFile(confFileName, "utf-8");
@@ -150,10 +150,10 @@ public class LazyConfig {
             LOG.info("set retry="+retry);
         }
         
-          if (confJson.has("max_retry")) {
-            maxRetry = confJson.getInt("max_retry");
-            LOG.info("set max_retry="+maxRetry);
-        }
+//          if (confJson.has("max_retry")) {
+//            maxRetry = confJson.getInt("max_retry");
+//            LOG.info("set max_retry="+maxRetry);
+//        }
         
         if(confJson.has("max_receive_size")){
             maxReceiveSize=confJson.getInt("max_receive_size");
@@ -182,14 +182,14 @@ public class LazyConfig {
     public void setMaxReceiveSize(int maxReceiveSize) {
         this.maxReceiveSize = maxReceiveSize;
     }
-
-    public int getMaxRetry() {
-        return maxRetry;
-    }
-
-    public void setMaxRetry(int maxRetry) {
-        this.maxRetry = maxRetry;
-    }
+//
+//    public int getMaxRetry() {
+//        return maxRetry;
+//    }
+//
+//    public void setMaxRetry(int maxRetry) {
+//        this.maxRetry = maxRetry;
+//    }
 
     
 
