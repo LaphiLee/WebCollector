@@ -24,8 +24,8 @@ import cn.edu.hfut.dmic.webcollector.model.CrawlDatums;
 import cn.edu.hfut.dmic.webcollector.model.Links;
 import cn.edu.hfut.dmic.webcollector.model.Page;
 import cn.edu.hfut.dmic.webcollector.net.HttpRequest;
-import cn.edu.hfut.dmic.webcollector.net.HttpResponse;
 import cn.edu.hfut.dmic.webcollector.net.Requester;
+import cn.edu.hfut.dmic.webcollector.util.ConfigurationUtils;
 import cn.edu.hfut.dmic.webcollector.util.RegexRule;
 import org.jsoup.nodes.Document;
 import org.slf4j.Logger;
@@ -35,7 +35,7 @@ import org.slf4j.LoggerFactory;
  *
  * @author hu
  */
-public abstract class AutoParseCrawler extends Crawler implements Executor, Visitor, Requester {
+public abstract class AutoParseCrawler extends Crawler implements Executor, Visitor, Requester{
 
     public static final Logger LOG = LoggerFactory.getLogger(AutoParseCrawler.class);
 
@@ -43,22 +43,29 @@ public abstract class AutoParseCrawler extends Crawler implements Executor, Visi
      * 是否自动抽取符合正则的链接并加入后续任务
      */
     protected boolean autoParse = true;
-
     protected Visitor visitor;
     protected Requester requester;
 
     public AutoParseCrawler(boolean autoParse) {
         this.autoParse = autoParse;
-        this.visitor = this;
         this.requester = this;
+        this.visitor = this;
         this.executor = this;
     }
 
     @Override
-    public HttpResponse getResponse(CrawlDatum crawlDatum) throws Exception {
+    public Page getResponse(CrawlDatum crawlDatum) throws Exception {
         HttpRequest request = new HttpRequest(crawlDatum);
-        return request.getResponse();
+        return request.responsePage();
     }
+
+    @Override
+    protected void registerOtherConfigurations() {
+        super.registerOtherConfigurations();
+        ConfigurationUtils.setTo(this, requester);
+        ConfigurationUtils.setTo(this, visitor);
+    }
+
 
     /**
      * URL正则约束
@@ -67,8 +74,7 @@ public abstract class AutoParseCrawler extends Crawler implements Executor, Visi
 
     @Override
     public void execute(CrawlDatum datum, CrawlDatums next) throws Exception {
-        HttpResponse response = requester.getResponse(datum);
-        Page page = new Page(datum, response);
+        Page page = requester.getResponse(datum);
         visitor.visit(page, next);
         if (autoParse && !regexRule.isEmpty()) {
             parseLink(page, next);
@@ -81,11 +87,11 @@ public abstract class AutoParseCrawler extends Crawler implements Executor, Visi
     }
 
     protected void parseLink(Page page, CrawlDatums next) {
-        String conteType = page.getResponse().getContentType();
+        String conteType = page.contentType();
         if (conteType != null && conteType.contains("text/html")) {
-            Document doc = page.getDoc();
+            Document doc = page.doc();
             if (doc != null) {
-                Links links = new Links().addByRegex(doc, regexRule);
+                Links links = new Links().addByRegex(doc, regexRule, getConf().getAutoDetectImg());
                 next.add(links);
             }
         }
@@ -161,4 +167,6 @@ public abstract class AutoParseCrawler extends Crawler implements Executor, Visi
     public void setRequester(Requester requester) {
         this.requester = requester;
     }
+
+    
 }

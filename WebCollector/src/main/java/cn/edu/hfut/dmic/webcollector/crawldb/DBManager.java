@@ -17,21 +17,31 @@
  */
 package cn.edu.hfut.dmic.webcollector.crawldb;
 
+
+import cn.edu.hfut.dmic.webcollector.conf.DefaultConfigured;
 import cn.edu.hfut.dmic.webcollector.model.CrawlDatum;
 import cn.edu.hfut.dmic.webcollector.model.CrawlDatums;
-import cn.edu.hfut.dmic.webcollector.model.Links;
+import cn.edu.hfut.dmic.webcollector.util.ConfigurationUtils;
 
 /**
  *
  * @author hu
  */
-public abstract class DBManager implements Injector, SegmentWriter, DBLock {
+public abstract class DBManager extends DefaultConfigured implements Injector, SegmentWriter{
 
     public abstract boolean isDBExists();
 
     public abstract void clear() throws Exception;
 
-    public abstract Generator getGenerator();
+    public abstract Generator createGenerator();
+
+    public Generator createGenerator(GeneratorFilter generatorFilter){
+        Generator generator = createGenerator();
+        generator.setFilter(generatorFilter);
+
+        ConfigurationUtils.setTo(this, generator, generatorFilter);
+        return generator;
+    }
 
     public abstract void open() throws Exception;
 
@@ -39,28 +49,30 @@ public abstract class DBManager implements Injector, SegmentWriter, DBLock {
 
     public abstract void inject(CrawlDatum datum, boolean force) throws Exception;
 
+    public abstract void inject(CrawlDatums datums, boolean force) throws Exception;
+
     public abstract void merge() throws Exception;
 
     public void inject(CrawlDatum datum) throws Exception {
         inject(datum, false);
     }
 
-    public void inject(CrawlDatums datums, boolean force) throws Exception {
-        for (CrawlDatum datum : datums) {
-            inject(datum, force);
-        }
-    }
+//    public void inject(CrawlDatums datums, boolean force) throws Exception {
+//        for (CrawlDatum datum : datums) {
+//            inject(datum, force);
+//        }
+//    }
 
     public void inject(CrawlDatums datums) throws Exception {
         inject(datums, false);
     }
 
-    public void inject(Links links, boolean force) throws Exception {
+    public void inject(Iterable<String> links, boolean force) throws Exception {
         CrawlDatums datums = new CrawlDatums(links);
         inject(datums, force);
     }
 
-    public void inject(Links links) throws Exception {
+    public void inject(Iterable<String> links) throws Exception {
         inject(links, false);
     }
 

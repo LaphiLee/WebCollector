@@ -17,8 +17,9 @@
  */
 package cn.edu.hfut.dmic.webcollector.net;
 
+import cn.edu.hfut.dmic.webcollector.conf.Configuration;
 import cn.edu.hfut.dmic.webcollector.model.CrawlDatum;
-import cn.edu.hfut.dmic.webcollector.util.Config;
+import cn.edu.hfut.dmic.webcollector.model.Page;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -41,19 +42,24 @@ import org.slf4j.LoggerFactory;
  *
  * @author hu
  */
-public class HttpRequest {
+public class HttpRequest{
 
     public static final Logger LOG = LoggerFactory.getLogger(HttpRequest.class);
 
-    protected int MAX_REDIRECT = Config.MAX_REDIRECT;
-    protected int MAX_RECEIVE_SIZE = Config.MAX_RECEIVE_SIZE;
-    protected String method = Config.DEFAULT_HTTP_METHOD;
+
+    protected Configuration defaultConf = Configuration.getDefault();
+
+    protected int MAX_REDIRECT = defaultConf.getMaxRedirect();
+
+    protected int MAX_RECEIVE_SIZE = defaultConf.getMaxReceiveSize();
+    protected String method = "GET";
     protected boolean doinput = true;
     protected boolean dooutput = true;
     protected boolean followRedirects = false;
-    protected int timeoutForConnect = Config.TIMEOUT_CONNECT;
-    protected int timeoutForRead = Config.TIMEOUT_READ;
+    protected int timeoutForConnect = defaultConf.getConnectTimeout();
+    protected int timeoutForRead = defaultConf.getReadTimeout();
     protected byte[] outputData=null;
+    protected String userAgent = defaultConf.getDefaultUserAgent();
     Proxy proxy = null;
 
     protected Map<String, List<String>> headerMap = null;
@@ -62,17 +68,14 @@ public class HttpRequest {
 
     public HttpRequest(String url) throws Exception {
         this.crawlDatum = new CrawlDatum(url);
-        setUserAgent(Config.DEFAULT_USER_AGENT);
     }
 
     public HttpRequest(String url, Proxy proxy) throws Exception {
-        this(url);
-        this.proxy = proxy;
+        this(new CrawlDatum(url), proxy);
     }
 
     public HttpRequest(CrawlDatum crawlDatum) throws Exception {
         this.crawlDatum = crawlDatum;
-        setUserAgent(Config.DEFAULT_USER_AGENT);
     }
 
     public HttpRequest(CrawlDatum crawlDatum, Proxy proxy) throws Exception {
@@ -80,8 +83,24 @@ public class HttpRequest {
         this.proxy = proxy;
     }
 
-    public HttpResponse getResponse() throws Exception {
-        URL url = new URL(crawlDatum.getUrl());
+    public Page responsePage() throws Exception{
+        HttpResponse response = response();
+        Page page = new Page(
+                crawlDatum,
+                response.code(),
+                response.contentType(),
+                response.content()
+        );
+        page.obj(response);
+        return page;
+    }
+
+
+    public HttpResponse response() throws Exception {
+        URL url = new URL(crawlDatum.url());
+        if(userAgent!=null){
+            setUserAgent(userAgent);
+        }
         HttpResponse response = new HttpResponse(url);
         int code = -1;
         int maxRedirect = Math.max(0, MAX_REDIRECT);
@@ -107,7 +126,7 @@ public class HttpRequest {
                 code = con.getResponseCode();
                 /*只记录第一次返回的code*/
                 if (redirect == 0) {
-                    response.setCode(code);
+                    response.code(code);
                 }
                 
                 if(code==HttpURLConnection.HTTP_NOT_FOUND){
@@ -167,8 +186,8 @@ public class HttpRequest {
                 bos.write(buf, 0, read);
             }
 
-            response.setContent(bos.toByteArray());
-            response.setHeaders(con.getHeaderFields());
+            response.content(bos.toByteArray());
+            response.headers(con.getHeaderFields());
             bos.close();
 
             return response;
@@ -189,6 +208,7 @@ public class HttpRequest {
 
         con.setDoInput(doinput);
         con.setDoOutput(dooutput);
+
 
         con.setConnectTimeout(timeoutForConnect);
         con.setReadTimeout(timeoutForRead);
@@ -398,6 +418,10 @@ public class HttpRequest {
 
     public byte[] getOutputData() {
         return outputData;
+    }
+
+    public String getUserAgent() {
+        return userAgent;
     }
 
     public void setOutputData(byte[] outputData) {

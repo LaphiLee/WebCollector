@@ -19,9 +19,10 @@ package cn.edu.hfut.dmic.webcollector.fetcher;
 
 import cn.edu.hfut.dmic.webcollector.crawldb.DBManager;
 import cn.edu.hfut.dmic.webcollector.crawldb.Generator;
+import cn.edu.hfut.dmic.webcollector.crawldb.GeneratorFilter;
+import cn.edu.hfut.dmic.webcollector.conf.CommonConfigured;
 import cn.edu.hfut.dmic.webcollector.model.CrawlDatum;
 import cn.edu.hfut.dmic.webcollector.model.CrawlDatums;
-import cn.edu.hfut.dmic.webcollector.util.Config;
 
 import java.io.IOException;
 import java.util.Collections;
@@ -30,6 +31,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
+import cn.edu.hfut.dmic.webcollector.util.ConfigurationUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -38,26 +40,21 @@ import org.slf4j.LoggerFactory;
  *
  * @author hu
  */
-public class Fetcher {
+public class Fetcher extends CommonConfigured{
 
     public static final Logger LOG = LoggerFactory.getLogger(Fetcher.class);
 
     public DBManager dbManager;
 
     public Executor executor;
+    public NextFilter nextFilter = null;
 
-    //public Requester requester;
-    //public Visitor visitor;
     private AtomicInteger activeThreads;
     private AtomicInteger startedThreads;
     private AtomicInteger spinWaiting;
     private AtomicLong lastRequestStart;
-    private QueueFeeder feeder;
-    private FetchQueue fetchQueue;
-    private long executeInterval = 0;
-    //   private int retry = 3;
-//    private long retryInterval = 0;
-//    private long visitInterval = 0;
+    private QueueFeeder feeder = null;
+    private FetchQueue fetchQueue = null;
 
     /**
      *
@@ -79,15 +76,6 @@ public class Fetcher {
         this.executor = executor;
     }
 
-    /*
-     public Visitor getVisitor() {
-     return visitor;
-     }
-
-     public void setVisitor(Visitor visitor) {
-     this.visitor = visitor;
-     }
-     */
     /**
      *
      */
@@ -132,7 +120,7 @@ public class Fetcher {
         public synchronized void dump() {
             for (int i = 0; i < queue.size(); i++) {
                 FetchItem it = queue.get(i);
-                LOG.info("  " + i + ". " + it.datum.getUrl());
+                LOG.info("  " + i + ". " + it.datum.url());
             }
 
         }
@@ -143,17 +131,19 @@ public class Fetcher {
 
         public FetchQueue queue;
 
-        public Generator generator;
-
+        public DBManager dbManager;
+        public Generator generator = null;
+        public GeneratorFilter generatorFilter = null;
         public int size;
 
-        public QueueFeeder(FetchQueue queue, Generator generator, int size) {
+        public QueueFeeder(FetchQueue queue, DBManager dbManager, GeneratorFilter generatorFilter, int size) {
             this.queue = queue;
-            this.generator = generator;
+            this.dbManager = dbManager;
+            this.generatorFilter = generatorFilter;
             this.size = size;
         }
 
-        public void stopFeeder() {
+        public void stopFeeder(){
             running = false;
             while (this.isAlive()) {
                 try {
@@ -164,10 +154,22 @@ public class Fetcher {
             }
         }
 
-        public boolean running = true;
+        public void closeGenerator() throws Exception {
+            if(generator!=null) {
+                generator.close();
+                LOG.info("close generator:" + generator.getClass().getName());
+            }
+        }
+
+        public volatile boolean running = true;
 
         @Override
-        public void run() {
+        public void run(){
+
+            generator = dbManager.createGenerator(generatorFilter);
+            LOG.info("create generator:" + generator.getClass().getName());
+            String generatorFilterClassName = (generatorFilter==null)?"null":generatorFilter.getClass().getName();
+            LOG.info("use generatorFilter:" + generatorFilterClassName);
 
             boolean hasMore = true;
             running = true;
@@ -238,23 +240,34 @@ public class Fetcher {
                         CrawlDatums next = new CrawlDatums();
                         try {
                             executor.execute(crawlDatum, next);
-                            LOG.info("done: " + crawlDatum.getKey());
+                            if (nextFilter != null) {
+                                CrawlDatums filteredNext = new CrawlDatums();
+                                for (int i = 0; i < next.size(); i++) {
+                                    CrawlDatum filterResult = nextFilter.filter(next.get(i), crawlDatum);
+                                    if (filterResult != null) {
+                                        filteredNext.add(filterResult);
+                                    }
+                                }
+                                next = filteredNext;
+                            }
+                            LOG.info("done: " + crawlDatum.briefInfo());
                             crawlDatum.setStatus(CrawlDatum.STATUS_DB_SUCCESS);
                         } catch (Exception ex) {
-                            LOG.info("failed: " + crawlDatum.getKey(), ex);
+                            LOG.info("failed: " + crawlDatum.briefInfo(), ex);
                             crawlDatum.setStatus(CrawlDatum.STATUS_DB_FAILED);
                         }
 
                         crawlDatum.incrExecuteCount(1);
                         crawlDatum.setExecuteTime(System.currentTimeMillis());
                         try {
-                            dbManager.wrtieFetchSegment(crawlDatum);
+                            dbManager.writeFetchSegment(crawlDatum);
                             if (crawlDatum.getStatus() == CrawlDatum.STATUS_DB_SUCCESS && !next.isEmpty()) {
-                                dbManager.wrtieParseSegment(next);
+                                dbManager.writeParseSegment(next);
                             }
                         } catch (Exception ex) {
                             LOG.info("Exception when updating db", ex);
                         }
+                        long executeInterval = getConf().getExecuteInterval();
                         if (executeInterval > 0) {
                             try {
                                 Thread.sleep(executeInterval);
@@ -262,33 +275,6 @@ public class Fetcher {
                             }
                         }
 
-                        /* 老代码
-                         if (visit(crawlDatum, page, next)) {
-                         try {
-                         dbManager.wrtieFetchSegment(crawlDatum);
-                         if (page.getResponse() == null) {
-                         continue;
-                         }
-                         if (page.getResponse().isRedirect()) {
-                         if (page.getResponse().getRealUrl() != null) {
-                         dbManager.writeRedirectSegment(crawlDatum, page.getResponse().getRealUrl().toString());
-                         }
-                         }
-                         if (!next.isEmpty()) {
-                         dbManager.wrtieParseSegment(next);
-                         }
-
-                         } catch (Exception ex) {
-                         LOG.info("Exception when updating db", ex);
-                         }
-                         }
-                         if (visitInterval > 0) {
-                         try {
-                         Thread.sleep(visitInterval);
-                         } catch (Exception sleepEx) {
-                         }
-                         }
-                         */
                     } catch (Exception ex) {
                         LOG.info("Exception", ex);
                     }
@@ -308,38 +294,27 @@ public class Fetcher {
     /**
      * 抓取当前所有任务，会阻塞到爬取完成
      *
-     * @param generator 给抓取提供任务的Generator(抓取任务生成器)
      * @throws IOException 异常
      */
-    public void fetchAll(Generator generator) throws Exception {
+    public int fetchAll(GeneratorFilter generatorFilter) throws Exception {
         if (executor == null) {
             LOG.info("Please Specify A Executor!");
-            return;
+            return 0;
         }
 
+        dbManager.merge();
+
         try {
-            if (dbManager.isLocked()) {
-                dbManager.merge();
-                dbManager.unlock();
-            }
-        } catch (Exception ex) {
-            LOG.info("Exception when merging history");
-        }
-        try {
-            dbManager.lock();
-            generator.open();
-            LOG.info("open generator:" + generator.getClass().getName());
             dbManager.initSegmentWriter();
             LOG.info("init segmentWriter:" + dbManager.getClass().getName());
             running = true;
-
             lastRequestStart = new AtomicLong(System.currentTimeMillis());
 
             activeThreads = new AtomicInteger(0);
             startedThreads = new AtomicInteger(0);
             spinWaiting = new AtomicInteger(0);
             fetchQueue = new FetchQueue();
-            feeder = new QueueFeeder(fetchQueue, generator, 1000);
+            feeder = new QueueFeeder(fetchQueue, dbManager, generatorFilter, 1000);
             feeder.start();
 
             FetcherThread[] fetcherThreads = new FetcherThread[threads];
@@ -361,7 +336,7 @@ public class Fetcher {
                     fetchQueue.dump();
                 }
 
-                if ((System.currentTimeMillis() - lastRequestStart.get()) > Config.THREAD_KILLER) {
+                if ((System.currentTimeMillis() - lastRequestStart.get()) > getConf().getThreadKiller()) {
                     LOG.info("Aborting with " + activeThreads + " hung threads.");
                     break;
                 }
@@ -379,7 +354,7 @@ public class Fetcher {
                     Thread.sleep(500);
                 } catch (Exception ex) {
                 }
-                if (System.currentTimeMillis() - waitThreadEndStartTime > Config.WAIT_THREAD_END_TIME) {
+                if (System.currentTimeMillis() - waitThreadEndStartTime > getConf().getWaitThreadEndTime()) {
                     LOG.info("kill threads");
                     for (int i = 0; i < fetcherThreads.length; i++) {
                         if (fetcherThreads[i].isAlive()) {
@@ -398,13 +373,13 @@ public class Fetcher {
             feeder.stopFeeder();
             fetchQueue.clear();
         } finally {
-            generator.close();
-            LOG.info("close generator:" + generator.getClass().getName());
+            if(feeder!=null) {
+                feeder.closeGenerator();
+            }
             dbManager.closeSegmentWriter();
-            LOG.info("close segmentwriter:" + dbManager.getClass().getName());
-            dbManager.merge();
-            dbManager.unlock();
+            LOG.info("close segmentWriter:" + dbManager.getClass().getName());
         }
+        return feeder.generator.getTotalGenerate();
     }
 
     volatile boolean running;
@@ -434,19 +409,6 @@ public class Fetcher {
         this.threads = threads;
     }
 
-//    public boolean isIsContentStored() {
-//        return isContentStored;
-//    }
-//    public void setIsContentStored(boolean isContentStored) {
-//        this.isContentStored = isContentStored;
-//    }
-    //    public int getRetry() {
-//        return retry;
-//    }
-//
-//    public void setRetry(int retry) {
-//        this.retry = retry;
-//    }
     public DBManager getDBManager() {
         return dbManager;
     }
@@ -455,127 +417,15 @@ public class Fetcher {
         this.dbManager = dbManager;
     }
 
-    /*
-     public Requester getRequester() {
-     return requester;
-     }
-     public void setRequester(Requester requester) {
-     this.requester = requester;
-     }
-     public boolean visit(CrawlDatum crawlDatum, Page page, CrawlDatums next) {
-     String url = crawlDatum.getUrl();
-     if (page.getStatus() == Page.STATUS_FETCH_SUCCESS) {
-     crawlDatum.setStatus(CrawlDatum.STATUS_DB_FETCHED);
-     crawlDatum.setHttpCode(page.getResponse().getCode());
-     if (!page.getResponse().isNotFound()) {
-     try {
-     visitor.visit(page, next);
-     } catch (Exception ex) {
-     LOG.info("Exception when visit URL: " + url, ex);
-     return false;
-     }
-     } else {
-     try {
-     visitor.notFound(page, next);
-     } catch (Exception ex) {
-     LOG.info("Exception when not found URL: " + url, ex);
-     return false;
-     }
-     }
-     try {
-     visitor.afterVisit(page, next);
-     } catch (Exception ex) {
-     LOG.info("Exception after visit URL: " + url, ex);
-     return false;
-     }
-     } else if (page.getStatus() == Page.STATUS_FETCH_FAILED) {
-     crawlDatum.setStatus(CrawlDatum.STATUS_DB_UNFETCHED);
-     try {
-     visitor.fail(page, next);
-     } catch (Exception ex) {
-     LOG.info("Exception when execute failed URL: " + url, ex);
-     return false;
-     }
-     }
-     return true;
-     }
-     public Page getPage(CrawlDatum crawlDatum) {
-     String url = crawlDatum.getUrl();
-     Page page;
-     HttpResponse response = null;
-     int retryIndex = 0;
-     Exception lastException = null;
-     int retryCount = 0;
-     for (; retryIndex <= retry; retryIndex++) {
-     try {
-     response = requester.getResponse(crawlDatum);//this.getHttpResponse(crawlDatum);
-     break;
-     } catch (Exception ex) {
-     String suffix = "th ";
-     switch (retryIndex + 1) {
-     case 1:
-     suffix = "st ";
-     break;
-     case 2:
-     suffix = "nd ";
-     break;
-     case 3:
-     suffix = "rd ";
-     break;
-     default:
-     suffix = "th ";
-     }
-     lastException = ex;
-     if (retryIndex < retry) {
-     StringBuilder sb = new StringBuilder();
-     sb.append("retry ").append(retryIndex + 1).append(suffix).append("URL:")
-     .append(url).append(" after ").append(retryInterval)
-     .append("ms ").append("(").append(ex.toString()).append(")");
-     String logMessage = sb.toString();
-     LOG.info(logMessage);
-     retryCount++;
-     if (retryInterval > 0) {
-     try {
-     Thread.sleep(retryInterval);
-     } catch (Exception sleepEx) {
-     }
-     }
-     }
-     }
-     }
-     if (response != null) {
-     if (!response.isNotFound()) {
-     LOG.info("fetch URL: " + url);
-     } else {
-     //404应该被当作抓取成功，因为404告诉爬虫页面不存在，以后不需要重试页面
-     LOG.info("ignore URL: " + url + " (not found)");
-     }
-     page = Page.createSuccessPage(crawlDatum, retryCount, response);
-     } else {
-     LOG.info("failed URL: " + url + " (" + lastException + ")");
-     page = Page.createFailedPage(crawlDatum, retryCount, lastException);
-     }
-     return page;
-     }
-     public long getRetryInterval() {
-     return retryInterval;
-     }
-     public void setRetryInterval(long retryInterval) {
-     this.retryInterval = retryInterval;
-     }
-     public long getVisitInterval() {
-     return visitInterval;
-     }
-     public void setVisitInterval(long visitInterval) {
-     this.visitInterval = visitInterval;
-     }
-     */
-    public long getExecuteInterval() {
-        return executeInterval;
+
+    public NextFilter getNextFilter() {
+        return nextFilter;
     }
 
-    public void setExecuteInterval(long executeInterval) {
-        this.executeInterval = executeInterval;
+    public void setNextFilter(NextFilter nextFilter) {
+        this.nextFilter = nextFilter;
     }
+    
+    
 
 }
